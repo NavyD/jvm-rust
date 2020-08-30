@@ -1,6 +1,7 @@
 pub mod cmd;
-
+pub mod classpath;
 use cmd::*;
+use classpath::*;
 
 fn main() {
     let cmd: Cmd = Cmd::from_args();
@@ -11,5 +12,6 @@ fn main() {
     } else {
         println!("starting jvm...")
     }
-    // println!("{:#?}", cmd);
+    let a = new_entry("path");
+    println!("{:#?}", cmd);
 }

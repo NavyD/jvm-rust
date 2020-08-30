@@ -15,4 +15,7 @@ pub struct Cmd {
     /// other arguments
     #[structopt(long)]
     pub args: Vec<String>,
+
+    #[structopt(long="--XjreOption")]
+    pub x_jre_option: String,
 }
