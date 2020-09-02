@@ -1,10 +1,28 @@
 use std::{env, fmt, fs, io, path};
-
 use zip::ZipArchive;
 
 pub use std::path::MAIN_SEPARATOR as SEPARATOR;
+
 pub trait Entry: fmt::Display {
+    /// 从classpath中找指定的class_name并返回class bytes
+    ///
+    /// class_name是路径格式：java.lang.Object=>java/lang/Object.class
     fn read_class(&self, class_name: &str) -> io::Result<Vec<u8>>;
+}
+
+pub fn new_entry<P: AsRef<path::Path>>(path: P) -> Result<Box<dyn Entry>, String> {
+    let path = path.as_ref().to_owned();
+    if !path.exists() {
+        return Err(format!("path {} does not exist", path.to_str().unwrap()));
+    }
+    let path_str = path.to_str().unwrap();
+    // if path_str.contains(SEPARATOR) {
+    //     return Ok(Box::new(CompositeEntry::new(path)));
+    // }
+    // if path_str.strip_suffix("*").is_some() {
+    //     return Ok(Box::new(CompositeEntry::with_wildcard_path(path_str)));
+    // }
+    todo!()
 }
 
 /// 实现
@@ -13,9 +31,18 @@ struct DirEntry {
 }
 
 impl DirEntry {
-    fn new(path: &str) -> Self {
+    /// 用当前目录path创建一个entry
+    ///
+    /// # panic
+    ///
+    /// 如果path不存在或不是目录
+    fn new<P: AsRef<path::Path>>(path: P) -> Self {
         match fs::canonicalize(path) {
-            Ok(p) => Self { abs_dir: p },
+            Ok(p) => if p.is_dir() {
+                Self { abs_dir: p }
+            } else {
+                panic!("{} is a file", p.to_str().unwrap())
+            },
             Err(e) => panic!("path error: {}", e),
         }
     }
@@ -35,16 +62,64 @@ impl fmt::Display for DirEntry {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[cfg(test)]
+    mod dir_entry_tests {
+        use super::*;
+
+        #[test]
+        fn basics() {
+            let entry = DirEntry::new("resources/test/classpath/user");
+            let data = entry.read_class("HelloWorld.java");
+            assert!(data.is_ok());
+            let text = br#"public class HelloWorld {
+    public static void main(String[] args) {
+        System.out.println("Hello World");
+    }
+}
+"#
+            .to_vec();
+            assert!(data.unwrap() == text);
+        }
+
+        #[test]
+        #[should_panic]
+        fn new_panic_with_path_not_found() {
+            DirEntry::new(".resources_not_found");
+        }
+
+        #[test]
+        #[should_panic]
+        fn new_panic_with_file() {
+            DirEntry::new("resources/test/classpath/user/HelloWorld.java");
+        }
+
+        #[test]
+        fn read_class_not_found() {
+            let entry = DirEntry::new("resources/test/classpath/user");
+            assert!(entry.read_class("not_found_class.file").is_err());
+        }
+    }
+}
+
 use io::prelude::*;
 struct ZipEntry {
     abs_dir: path::PathBuf,
 }
 
 impl ZipEntry {
-    fn new(path: &str) -> Self {
-        match fs::canonicalize(path) {
-            Ok(p) => Self { abs_dir: p },
-            Err(e) => panic!("path error: {}", e),
+    /// 用当前zip或jar文件创建一个entry
+    ///
+    /// # panic
+    ///
+    /// 如果path不是一个文件
+    fn new<P: AsRef<path::Path>>(path: P) -> Self {
+        match fs::canonicalize(path.as_ref()) {
+            Ok(path) if path.is_file() => Self { abs_dir: path },
+            _ => panic!("{} is not a file", path.as_ref().to_str().unwrap()),
         }
     }
 }
@@ -76,10 +151,6 @@ impl fmt::Display for ZipEntry {
 
 struct CompositeEntry {
     entrys: Vec<Box<dyn Entry>>,
-}
-
-pub fn new_entry<P: AsRef<path::Path>>(path: P) -> Result<Box<dyn Entry>, String> {
-    todo!()
 }
 
 impl CompositeEntry {
@@ -149,9 +220,9 @@ pub struct Classpath {
 
 impl Classpath {
     /// 从option: jre, cp中构建Classpath对象
-    /// 
+    ///
     /// # panic
-    /// 
+    ///
     /// 如果jre, cp没有可用路径
     pub fn new(jre_option: &str, cp_option: &str) -> Self {
         let (bc, ec) = Self::parse_boot_and_ext_classpath(jre_option);
@@ -163,9 +234,9 @@ impl Classpath {
     }
 
     /// 从jre option中创建出boot classpath, ext classpath entry
-    /// 
+    ///
     /// # panic
-    /// 
+    ///
     /// 如果任一个classpath entry创建失败
     fn parse_boot_and_ext_classpath(jre_option: &str) -> (Box<dyn Entry>, Box<dyn Entry>) {
         let jre_dir = Classpath::get_jre_dir(jre_option);
@@ -236,7 +307,7 @@ impl Classpath {
 
 impl Entry for Classpath {
     /// 依次从boot,ext,user classpath中寻找class。
-    /// 
+    ///
     /// 如果未找到则返回user classpath中的Err
     fn read_class(&self, class_name: &str) -> io::Result<Vec<u8>> {
         let class_name = &(class_name.to_string() + ".class");

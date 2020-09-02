@@ -12,6 +12,6 @@ fn main() {
     } else {
         println!("starting jvm...")
     }
-    let a = new_entry("path");
+    // let a = new_entry("path");
     println!("{:#?}", cmd);
 }
