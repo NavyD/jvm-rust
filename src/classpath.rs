@@ -1,3 +1,4 @@
+use io::prelude::*;
 use std::{env, fmt, fs, io, path};
 use zip::ZipArchive;
 
@@ -6,23 +7,24 @@ pub use std::path::MAIN_SEPARATOR as SEPARATOR;
 pub trait Entry: fmt::Display {
     /// 从classpath中找指定的class_name并返回class bytes
     ///
-    /// class_name是路径格式：java.lang.Object=>java/lang/Object.class
+    /// class_name是路径格式：class_name=java.lang.Object
     fn read_class(&self, class_name: &str) -> io::Result<Vec<u8>>;
 }
 
-pub fn new_entry<P: AsRef<path::Path>>(path: P) -> Result<Box<dyn Entry>, String> {
-    let path = path.as_ref().to_owned();
-    if !path.exists() {
-        return Err(format!("path {} does not exist", path.to_str().unwrap()));
+/// 将class名称转为path形式：class_name=java.lang.Object =>java/lang/Object.class
+fn class_to_path(class_name: &str) -> String {
+    class_name.replace(".", &SEPARATOR.to_string()) + ".class"
+}
+
+pub fn new_entry(path: &str) -> Box<dyn Entry> {
+    let path = path.trim();
+    if path.contains(&SEPARATOR.to_string()) {
+        return Box::new(CompositeEntry::new(path));
     }
-    let path_str = path.to_str().unwrap();
-    // if path_str.contains(SEPARATOR) {
-    //     return Ok(Box::new(CompositeEntry::new(path)));
-    // }
-    // if path_str.strip_suffix("*").is_some() {
-    //     return Ok(Box::new(CompositeEntry::with_wildcard_path(path_str)));
-    // }
-    todo!()
+    if let Some(suffix) = path.strip_suffix("*") {
+        return Box::new(CompositeEntry::with_wildcard_path(path));
+    }
+    return Box::new(DirEntry::new(path));
 }
 
 /// 实现
@@ -36,13 +38,15 @@ impl DirEntry {
     /// # panic
     ///
     /// 如果path不存在或不是目录
-    fn new<P: AsRef<path::Path>>(path: P) -> Self {
+    fn new(path: &str) -> Self {
         match fs::canonicalize(path) {
-            Ok(p) => if p.is_dir() {
-                Self { abs_dir: p }
-            } else {
-                panic!("{} is a file", p.to_str().unwrap())
-            },
+            Ok(p) => {
+                if p.is_dir() {
+                    Self { abs_dir: p }
+                } else {
+                    panic!("{} is a file", p.to_str().unwrap())
+                }
+            }
             Err(e) => panic!("path error: {}", e),
         }
     }
@@ -50,7 +54,8 @@ impl DirEntry {
 
 impl Entry for DirEntry {
     fn read_class(&self, class_name: &str) -> io::Result<Vec<u8>> {
-        let file = self.abs_dir.join(class_name);
+        let class_path = class_to_path(class_name);
+        let file = self.abs_dir.join(class_path);
         fs::read(file)
     }
 }
@@ -63,49 +68,37 @@ impl fmt::Display for DirEntry {
 }
 
 #[cfg(test)]
-mod tests {
+mod dir_entry_tests {
     use super::*;
 
-    #[cfg(test)]
-    mod dir_entry_tests {
-        use super::*;
-
-        #[test]
-        fn basics() {
-            let entry = DirEntry::new("resources/test/classpath/user");
-            let data = entry.read_class("HelloWorld.java");
-            assert!(data.is_ok());
-            let text = br#"public class HelloWorld {
-    public static void main(String[] args) {
-        System.out.println("Hello World");
+    #[test]
+    fn basics() {
+        let entry = DirEntry::new("resources/test/classpath/user");
+        let data = entry.read_class("xyz.navyd.HelloWorld");
+        assert!(data.is_ok());
+        // HelloWorld.class bytes length
+        assert_eq!(554, data.unwrap().len());
     }
-}
-"#
-            .to_vec();
-            assert!(data.unwrap() == text);
-        }
 
-        #[test]
-        #[should_panic]
-        fn new_panic_with_path_not_found() {
-            DirEntry::new(".resources_not_found");
-        }
+    #[test]
+    #[should_panic]
+    fn new_panic_with_path_not_found() {
+        DirEntry::new("no_path_");
+    }
 
-        #[test]
-        #[should_panic]
-        fn new_panic_with_file() {
-            DirEntry::new("resources/test/classpath/user/HelloWorld.java");
-        }
+    #[test]
+    #[should_panic]
+    fn new_panic_with_file() {
+        DirEntry::new("resources/test/classpath/user/HelloWorld.jar");
+    }
 
-        #[test]
-        fn read_class_not_found() {
-            let entry = DirEntry::new("resources/test/classpath/user");
-            assert!(entry.read_class("not_found_class.file").is_err());
-        }
+    #[test]
+    fn read_class_not_found() {
+        let entry = DirEntry::new("resources/test/classpath/user");
+        assert!(entry.read_class("hello").is_err());
     }
 }
 
-use io::prelude::*;
 struct ZipEntry {
     abs_dir: path::PathBuf,
 }
@@ -116,21 +109,24 @@ impl ZipEntry {
     /// # panic
     ///
     /// 如果path不是一个文件
-    fn new<P: AsRef<path::Path>>(path: P) -> Self {
-        match fs::canonicalize(path.as_ref()) {
+    fn new(path: &str) -> Self {
+        match fs::canonicalize(path) {
             Ok(path) if path.is_file() => Self { abs_dir: path },
-            _ => panic!("{} is not a file", path.as_ref().to_str().unwrap()),
+            _ => panic!("{} is not a file", path),
         }
     }
 }
 
 impl Entry for ZipEntry {
     fn read_class(&self, class_name: &str) -> io::Result<Vec<u8>> {
+        let class_path = class_to_path(class_name);
+        // zip file
         let mut zip = ZipArchive::new(fs::File::open(self.abs_dir.as_path())?)?;
         for i in 0..zip.len() {
             match zip.by_index(i) {
-                Ok(mut file) if file.name() == class_name => {
-                    let mut buf = vec![];
+                // the file name is path+filename: xyz/navyd/HelloWorld.class
+                Ok(mut file) if file.name() == class_path => {
+                    let mut buf = vec![0; file.size() as usize];
                     file.read(&mut buf)?;
                     return Ok(buf);
                 }
@@ -138,17 +134,58 @@ impl Entry for ZipEntry {
                 _ => continue,
             }
         }
-        todo!()
+        Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            "not found class: ".to_string()
+                + class_name
+                + " in path: "
+                + self.abs_dir.to_str().unwrap(),
+        ))
     }
 }
 
 impl fmt::Display for ZipEntry {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let s = self.abs_dir.to_str().expect("path to str error");
-        write!(f, "({})", s)
+        write!(f, "({})", self.abs_dir.to_str().expect("path to str error"))
     }
 }
 
+#[cfg(test)]
+mod zip_entry_tests {
+    use super::*;
+
+    #[test]
+    fn basics() {
+        let entry = ZipEntry::new("resources/test/classpath/user/HelloWorld.jar");
+        let data = entry.read_class("xyz.navyd.HelloWorld");
+        assert!(data.is_ok());
+        // HelloWorld.class length
+        assert_eq!(554, data.unwrap().len());
+    }
+
+    #[should_panic]
+    #[test]
+    fn new_panic_with_dir() {
+        ZipEntry::new("resources/test/classpath/user");
+    }
+
+    #[test]
+    fn read_class_not_found_error() {
+        let entry = ZipEntry::new("resources/test/classpath/user/HelloWorld.jar");
+        let data = entry.read_class("a.b.C");
+        assert!(data.is_err());
+        assert_eq!(io::ErrorKind::NotFound, data.unwrap_err().kind());
+    }
+
+    #[test]
+    fn read_class_non_zip_file_error() {
+        let entry = ZipEntry::new("resources/test/classpath/user/xyz/navyd/HelloWorld.class");
+        let data = entry.read_class("HelloWorld");
+        assert!(data.is_err());
+    }
+}
+
+// todo
 struct CompositeEntry {
     entrys: Vec<Box<dyn Entry>>,
 }
@@ -158,14 +195,13 @@ impl CompositeEntry {
         let mut entrys = vec![];
         let paths: Vec<&str> = path_list.split(SEPARATOR).collect();
         for path in paths {
-            if let Err(e) = new_entry(path).map(|entry| entrys.push(entry)) {
-                println!("{}", e);
-            }
+            entrys.push(new_entry(path));
         }
-        Self { entrys }
+        // Self { entrys }
+        todo!()
     }
 
-    fn with_wildcard_path(path: &str) -> io::Result<Self> {
+    fn with_wildcard_path(path: &str) -> Self {
         let mut entrys = vec![];
         // 去除 *
         let base_dir = &path.trim()[..path.len() - 1];
@@ -212,6 +248,18 @@ impl fmt::Display for CompositeEntry {
     }
 }
 
+#[cfg(test)]
+mod composite_entry_tests {
+    use super::*;
+
+    #[test]
+    fn basics() {
+        let entry = CompositeEntry::new("resources/test/classpath/user");
+        eprintln!("{}", entry);
+        todo!()
+    }
+}
+
 pub struct Classpath {
     pub boot_classpath: Box<dyn Entry>,
     pub ext_classpath: Box<dyn Entry>,
@@ -242,16 +290,10 @@ impl Classpath {
         let jre_dir = Classpath::get_jre_dir(jre_option);
         // jre/lib/*
         let jre_lib_path = jre_dir.join("lib").join("*");
-        let boot_classpath = match new_entry(jre_lib_path) {
-            Ok(entry) => entry,
-            Err(e) => panic!("{}", e),
-        };
+        let boot_classpath = new_entry(jre_lib_path.to_str().unwrap());
         // jre/lib/ext/*
         let jre_ext_path = jre_dir.join("lib").join("ext");
-        let ext_classpath = match new_entry(jre_ext_path) {
-            Ok(entry) => entry,
-            Err(e) => panic!("{}", e),
-        };
+        let ext_classpath = new_entry(jre_ext_path.to_str().unwrap());
         (boot_classpath, ext_classpath)
     }
 
@@ -268,10 +310,7 @@ impl Classpath {
         } else {
             cp_option
         };
-        match new_entry(path) {
-            Ok(entry) => entry,
-            Err(e) => panic!("{}", e),
-        }
+        new_entry(path)
     }
 
     /// 从jre option中返回可用的jre path。
@@ -325,5 +364,13 @@ impl fmt::Display for Classpath {
     /// 返回user classpath类路径表示
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.user_classpath.fmt(f)
+    }
+}
+
+#[cfg(test)]
+mod classpath_tests {
+    #[test]
+    fn basics() {
+        
     }
 }
