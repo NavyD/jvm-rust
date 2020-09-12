@@ -21,7 +21,7 @@ pub fn new_entry(path: &str) -> Box<dyn Entry> {
     if path.contains(&SEPARATOR.to_string()) {
         return Box::new(CompositeEntry::new(path));
     }
-    if let Some(suffix) = path.strip_suffix("*") {
+    if let Some(_) = path.strip_suffix("*") {
         return Box::new(CompositeEntry::with_wildcard_path(path));
     }
     return Box::new(DirEntry::new(path));
@@ -74,10 +74,10 @@ mod dir_entry_tests {
     #[test]
     fn basics() {
         let entry = DirEntry::new("resources/test/classpath/user");
-        let data = entry.read_class("xyz.navyd.HelloWorld");
+        let data = entry.read_class("xyz.navyd.ClassFileTest");
         assert!(data.is_ok());
         // HelloWorld.class bytes length
-        assert_eq!(554, data.unwrap().len());
+        assert_eq!(770, data.unwrap().len());
     }
 
     #[test]
@@ -156,11 +156,11 @@ mod zip_entry_tests {
 
     #[test]
     fn basics() {
-        let entry = ZipEntry::new("resources/test/classpath/user/HelloWorld.jar");
-        let data = entry.read_class("xyz.navyd.HelloWorld");
+        let entry = ZipEntry::new("resources/test/classpath/user/ClassFileTest.jar");
+        let data = entry.read_class("xyz.navyd.ClassFileTest");
         assert!(data.is_ok());
         // HelloWorld.class length
-        assert_eq!(554, data.unwrap().len());
+        assert_eq!(770, data.unwrap().len());
     }
 
     #[should_panic]
@@ -171,7 +171,7 @@ mod zip_entry_tests {
 
     #[test]
     fn read_class_not_found_error() {
-        let entry = ZipEntry::new("resources/test/classpath/user/HelloWorld.jar");
+        let entry = ZipEntry::new("resources/test/classpath/user/ClassFileTest.jar");
         let data = entry.read_class("a.b.C");
         assert!(data.is_err());
         assert_eq!(io::ErrorKind::NotFound, data.unwrap_err().kind());
@@ -179,7 +179,7 @@ mod zip_entry_tests {
 
     #[test]
     fn read_class_non_zip_file_error() {
-        let entry = ZipEntry::new("resources/test/classpath/user/xyz/navyd/HelloWorld.class");
+        let entry = ZipEntry::new("resources/test/classpath/user/xyz/navyd/ClassFileTest.class");
         let data = entry.read_class("HelloWorld");
         assert!(data.is_err());
     }
@@ -197,8 +197,7 @@ impl CompositeEntry {
         for path in paths {
             entrys.push(new_entry(path));
         }
-        // Self { entrys }
-        todo!()
+        Self { entrys }
     }
 
     fn with_wildcard_path(path: &str) -> Self {
@@ -245,18 +244,6 @@ impl fmt::Display for CompositeEntry {
             write!(f, "{}{}", entry, SEPARATOR)?;
         }
         Ok(())
-    }
-}
-
-#[cfg(test)]
-mod composite_entry_tests {
-    use super::*;
-
-    #[test]
-    fn basics() {
-        let entry = CompositeEntry::new("resources/test/classpath/user");
-        eprintln!("{}", entry);
-        todo!()
     }
 }
 
@@ -371,6 +358,6 @@ impl fmt::Display for Classpath {
 mod classpath_tests {
     #[test]
     fn basics() {
-        
+
     }
 }
