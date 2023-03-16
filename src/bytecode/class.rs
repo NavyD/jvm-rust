@@ -1,4 +1,5 @@
 use std::convert::TryInto;
+
 pub trait BytecodeReader: std::marker::Sized {
     /// 从bytes中读取`len=size_of<Self>()`个字节并返回len对应的unsigned int
     /// 
@@ -75,7 +76,7 @@ mod tests {
         assert_eq!(3405691582, U4::read(bytes));
         assert_eq!(55, U4::read(bytes));
     }
-    
+
     #[test]
     fn basic_u8() {
         let bytes = vec![0xCA, 0xFE, 0xBA, 0xBE, 0x00, 0x00, 0x00, 0x37];

@@ -357,7 +357,5 @@ impl fmt::Display for Classpath {
 #[cfg(test)]
 mod classpath_tests {
     #[test]
-    fn basics() {
-
-    }
+    fn basics() {}
 }
